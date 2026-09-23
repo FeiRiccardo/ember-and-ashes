@@ -4,9 +4,16 @@ import { GameBoardScene } from './scenes/GameBoardScene'
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   parent: 'app',
-  width: 640,
-  height: 792,
   backgroundColor: '#2b2b2b',
+  antialias: true,
+  resolution: window.devicePixelRatio || 1,
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    parent: 'app',
+    width: 640,
+    height: 792,
+  },
   scene: [GameBoardScene],
 }
 
