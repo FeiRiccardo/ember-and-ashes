@@ -8,7 +8,9 @@
 
 - [x] A web app manifest and service worker are present so the game can be installed via "Add to Home Screen" on iOS/Android
 - [x] A GitHub Actions workflow builds the project with Vite and publishes the static output to GitHub Pages on push to the main branch
-- [ ] The deployed Pages build loads and is playable at its published URL — **blocked, not yet verifiable**: this project has no git repository or GitHub remote initialized yet (confirmed at the start of this ticket), so there is nowhere for the workflow to run or deploy from. The workflow YAML is written and will trigger correctly once the owner initializes git, creates the GitHub repo, enables Pages (Settings → Pages → Source: GitHub Actions), and pushes to `main`. This checkbox should be verified and checked off after that first live deploy.
+- [x] The deployed Pages build loads and is playable at its published URL
+
+**Update**: git initialized, repo created at `github.com/FeiRiccardo/ember-and-ashes` (public), Pages enabled with `build_type: workflow`, pushed to `main`. The `Deploy to GitHub Pages` workflow ran successfully (build + deploy jobs both green) and the site is live at https://feiriccardo.github.io/ember-and-ashes/. Verified in a real browser: all assets (JS bundle, manifest, icons) resolve correctly under the `/ember-and-ashes/` project subpath (confirming `vite.config.ts`'s `base: './'` choice was correct), the service worker registers and reaches `activated` state, and the game is fully interactive (End Turn, AI raid, resource/score updates all fired correctly) on the live deployment. No console errors.
 
 ## Comments
 
