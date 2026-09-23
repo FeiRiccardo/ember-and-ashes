@@ -1,5 +1,5 @@
 import type { TerrainType } from '../data/terrain'
-import type { BuildingType } from '../data/buildings'
+import { BUILDING_DEFS, type BuildingType } from '../data/buildings'
 import type { TurnManager } from './TurnManager'
 
 // Placeholder-but-concrete constants (PopulationSystem's convention): shape is locked,
@@ -57,6 +57,10 @@ export class HazardSystem {
     private board: HazardBoard,
     private getTurnNumber: () => number,
     private getAge: () => number,
+    // Lets the player know a hazard actually struck and what happened to the
+    // building, instead of it silently vanishing (or reappearing) with no
+    // on-screen feedback.
+    private notify: (message: string) => void,
   ) {}
 
   registerWithTurnManager(turnManager: TurnManager): void {
@@ -89,18 +93,25 @@ export class HazardSystem {
 
     const target = eligible[Math.floor(Math.random() * eligible.length)]
     const destroy = Math.random() < 0.5
+    const targetTerrain = this.board.getTerrainAt(target.row, target.col)
+    const isFire = targetTerrain === 'volcanic' || targetTerrain === 'forest'
+    const hazardName = isFire ? 'Fire' : 'Flood'
+    const label = BUILDING_DEFS[target.type].label
 
     // Damage is implemented as an immediate destroy plus a tracked future restore, so
     // production code (Farm output, Population cap, etc.) needs no "is this disabled"
     // branch anywhere else — the building is simply gone until it comes back.
     this.board.destroyBuildingAt(target.row, target.col)
-    if (!destroy) {
+    if (destroy) {
+      this.notify(`${hazardName}! Your ${label} was destroyed.`)
+    } else {
       this.pendingRestores.push({
         row: target.row,
         col: target.col,
         type: target.type,
         dueTurn: this.getTurnNumber() + DAMAGE_RECOVERY_TURNS,
       })
+      this.notify(`${hazardName}! Your ${label} was damaged — it recovers in ${DAMAGE_RECOVERY_TURNS} turns.`)
     }
   }
 

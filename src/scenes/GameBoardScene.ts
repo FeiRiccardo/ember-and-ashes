@@ -9,6 +9,7 @@ import { AIOpponent } from '../systems/AIOpponent'
 import { ScoreSystem } from '../systems/ScoreSystem'
 import { PrestigeSystem } from '../systems/PrestigeSystem'
 import { SaveSystem } from '../systems/SaveSystem'
+import { computeHints } from '../systems/HintSystem'
 import { RESOURCE_ORDER, RESOURCE_LABELS } from '../data/resources'
 import { BUILDING_DEFS, BUILDABLE_TYPES, type BuildingType } from '../data/buildings'
 import {
@@ -25,7 +26,11 @@ const TILE_SIZE = 80
 const GRID_PIXELS = GRID_SIZE * TILE_SIZE
 const RESOURCE_BAR_HEIGHT = 92
 const GRID_TOP = RESOURCE_BAR_HEIGHT
-const UI_BAR_HEIGHT = 60
+// Two 60px rows: primary controls (Turn counter + End Turn), then secondary
+// controls (Save & Quit, Reset, Hints) — added when the bottom bar outgrew a
+// single row of buttons.
+const UI_BAR_HEIGHT = 120
+const UI_ROW_HEIGHT = 60
 
 const TOWN_HALL_TILE = { row: 3, col: 3 }
 
@@ -74,6 +79,14 @@ export class GameBoardScene extends Phaser.Scene {
   // Single shared Graphics layer holding every tile's terrain texture accent
   // (see drawTerrainTexture); recreated each time drawGrid() runs.
   private terrainTextureGraphics?: Phaser.GameObjects.Graphics
+  // Raid/hazard messages collected during the turn just ending (via the
+  // `notify` callback passed to AIOpponent/HazardSystem), shown as a
+  // dismissible report once End Turn finishes.
+  private pendingEvents: string[] = []
+  private notificationPanel?: Phaser.GameObjects.Container
+  private resetConfirmPanel?: Phaser.GameObjects.Container
+  private hintsPanel?: Phaser.GameObjects.Container
+  private hintsVisible = false
 
   constructor() {
     super('GameBoard')
@@ -111,9 +124,12 @@ export class GameBoardScene extends Phaser.Scene {
     this.createTurnUI()
 
     // AI TURN HOOK: ticket 07 (AI Opponent) registers its aiTurn-phase handler here.
-    new AIOpponent(this.resourceSystem, this, () => this.scoreSystem.getAge()).registerWithTurnManager(
-      this.turnManager,
-    )
+    new AIOpponent(
+      this.resourceSystem,
+      this,
+      () => this.scoreSystem.getAge(),
+      (message) => this.pendingEvents.push(message),
+    ).registerWithTurnManager(this.turnManager)
   }
 
   // HAZARD HOOK: ticket 08 (Hazard Events) registers its hazardRoll-phase handler here.
@@ -122,6 +138,7 @@ export class GameBoardScene extends Phaser.Scene {
       this,
       () => this.turnManager.getTurnNumber(),
       () => this.scoreSystem.getAge(),
+      (message) => this.pendingEvents.push(message),
     ).registerWithTurnManager(this.turnManager)
   }
 
@@ -363,10 +380,10 @@ export class GameBoardScene extends Phaser.Scene {
     }
   }
 
-  // Cataclysm (ticket 09): called by ScoreSystem once the score reaches the
-  // current Age's Destruction Threshold. Clears the board and regenerates it
-  // for the next Age; ScoreSystem has already reset banked resources.
-  resetForNewAge(): void {
+  // Shared by the cataclysm reset (keeps turn/Age/prestige) and the manual
+  // Reset Game action (wipes everything): destroys the current terrain and
+  // building visuals, regenerates a fresh map, and re-places Town Hall.
+  private regenerateBoard(): void {
     this.buildMenu?.destroy()
 
     for (let row = 0; row < GRID_SIZE; row++) {
@@ -387,6 +404,35 @@ export class GameBoardScene extends Phaser.Scene {
     this.buildings[TOWN_HALL_TILE.row][TOWN_HALL_TILE.col] = 'townHall'
 
     this.drawGrid()
+  }
+
+  // Cataclysm (ticket 09): called by ScoreSystem once the score reaches the
+  // current Age's Destruction Threshold. Clears the board and regenerates it
+  // for the next Age; ScoreSystem has already reset banked resources.
+  resetForNewAge(): void {
+    this.regenerateBoard()
+    this.resourceText.setText(this.formatResources())
+    this.scoreText.setText(this.formatScore())
+    this.prestigeText.setText(this.formatPrestige())
+  }
+
+  // Reset Game: a full restart, distinct from resetForNewAge() above — this
+  // also wipes the turn count, Age, prestige progress, and the save itself,
+  // rather than carrying anything forward.
+  private performFullReset(): void {
+    this.saveSystem.clear()
+    this.notificationPanel?.destroy()
+    this.hintsPanel?.destroy()
+    this.hintsVisible = false
+    this.pendingEvents = []
+
+    this.regenerateBoard()
+    this.resourceSystem.reset()
+    this.turnManager.setTurnNumber(1)
+    this.scoreSystem.setAge(1)
+    this.prestigeSystem.setAgesCompleted(0)
+
+    this.turnText.setText('Turn: 1')
     this.resourceText.setText(this.formatResources())
     this.scoreText.setText(this.formatScore())
     this.prestigeText.setText(this.formatPrestige())
@@ -719,72 +765,249 @@ export class GameBoardScene extends Phaser.Scene {
 
   private createTurnUI() {
     const barY = GRID_TOP + GRID_PIXELS
+    const buttonHeight = 40
 
     this.add.rectangle(0, barY, GRID_PIXELS, UI_BAR_HEIGHT, UI_BG).setOrigin(0, 0)
 
-    this.turnText = this.add.text(
-      16,
-      barY + UI_BAR_HEIGHT / 2,
-      `Turn: ${this.turnManager.getTurnNumber()}`,
-      { fontFamily: UI_FONT, fontSize: '20px', color: UI_TEXT },
-    )
+    // Row A: turn counter + End Turn (primary controls).
+    const rowAY = barY
+
+    this.turnText = this.add.text(16, rowAY + UI_ROW_HEIGHT / 2, `Turn: ${this.turnManager.getTurnNumber()}`, {
+      fontFamily: UI_FONT,
+      fontSize: '20px',
+      color: UI_TEXT,
+    })
     this.turnText.setOrigin(0, 0.5)
 
-    const buttonWidth = 140
-    const buttonHeight = 40
-    const buttonX = GRID_PIXELS - buttonWidth - 16
-    const buttonY = barY + (UI_BAR_HEIGHT - buttonHeight) / 2
+    const endTurnWidth = 140
+    const endTurnX = GRID_PIXELS - endTurnWidth - 16
+    const endTurnY = rowAY + (UI_ROW_HEIGHT - buttonHeight) / 2
 
-    const button = this.add.rectangle(buttonX, buttonY, buttonWidth, buttonHeight, BUTTON_PRIMARY)
-    button.setOrigin(0, 0)
-    button.setStrokeStyle(2, UI_BORDER)
-    button.setInteractive({ useHandCursor: true })
+    const endTurnButton = this.add.rectangle(endTurnX, endTurnY, endTurnWidth, buttonHeight, BUTTON_PRIMARY)
+    endTurnButton.setOrigin(0, 0)
+    endTurnButton.setStrokeStyle(2, UI_BORDER)
+    endTurnButton.setInteractive({ useHandCursor: true })
 
-    const buttonLabel = this.add.text(
-      buttonX + buttonWidth / 2,
-      buttonY + buttonHeight / 2,
+    const endTurnLabel = this.add.text(
+      endTurnX + endTurnWidth / 2,
+      endTurnY + buttonHeight / 2,
       'End Turn',
       { fontFamily: UI_FONT, fontSize: '18px', color: UI_TEXT },
     )
-    buttonLabel.setOrigin(0.5)
+    endTurnLabel.setOrigin(0.5)
+    endTurnButton.on('pointerdown', () => this.handleEndTurn())
 
-    button.on('pointerdown', () => this.handleEndTurn())
+    // Row B: secondary controls (Save & Quit, Reset, Hints), evenly spaced.
+    const rowBY = barY + UI_ROW_HEIGHT
+    const margin = 16
+    const gap = 12
+    const smallButtonWidth = (GRID_PIXELS - margin * 2 - gap * 2) / 3
+    const smallButtonY = rowBY + (UI_ROW_HEIGHT - buttonHeight) / 2
 
-    const saveButtonWidth = 140
-    const saveButtonX = (GRID_PIXELS - saveButtonWidth) / 2
-    const saveButtonY = buttonY
+    const makeSmallButton = (
+      index: number,
+      label: string,
+      color: number,
+      onClick: (setLabel: (text: string) => void) => void,
+    ) => {
+      const x = margin + index * (smallButtonWidth + gap)
+      const rect = this.add.rectangle(x, smallButtonY, smallButtonWidth, buttonHeight, color)
+      rect.setOrigin(0, 0)
+      rect.setStrokeStyle(2, UI_BORDER)
+      rect.setInteractive({ useHandCursor: true })
 
-    const saveButton = this.add.rectangle(
-      saveButtonX,
-      saveButtonY,
-      saveButtonWidth,
-      buttonHeight,
-      BUTTON_SECONDARY,
-    )
-    saveButton.setOrigin(0, 0)
-    saveButton.setStrokeStyle(2, UI_BORDER)
-    saveButton.setInteractive({ useHandCursor: true })
+      const text = this.add.text(x + smallButtonWidth / 2, smallButtonY + buttonHeight / 2, label, {
+        fontFamily: UI_FONT,
+        fontSize: '15px',
+        color: UI_TEXT,
+      })
+      text.setOrigin(0.5)
 
-    const saveLabel = this.add.text(
-      saveButtonX + saveButtonWidth / 2,
-      saveButtonY + buttonHeight / 2,
-      'Save & Quit',
-      { fontFamily: UI_FONT, fontSize: '16px', color: UI_TEXT },
-    )
-    saveLabel.setOrigin(0.5)
+      rect.on('pointerdown', () => onClick((newLabel) => text.setText(newLabel)))
+    }
 
-    saveButton.on('pointerdown', () => {
+    makeSmallButton(0, 'Save & Quit', BUTTON_SECONDARY, (setLabel) => {
       this.performSave()
-      saveLabel.setText('Saved!')
-      this.time.delayedCall(1000, () => saveLabel.setText('Save & Quit'))
+      setLabel('Saved!')
+      this.time.delayedCall(1000, () => setLabel('Save & Quit'))
     })
+
+    makeSmallButton(1, 'Reset', BUTTON_SECONDARY, () => this.openResetConfirm())
+
+    makeSmallButton(2, 'Hints', BUTTON_SECONDARY, () => this.toggleHints())
   }
 
   private handleEndTurn() {
+    this.pendingEvents = []
     const newTurnNumber = this.turnManager.endTurn()
     this.turnText.setText(`Turn: ${newTurnNumber}`)
     this.resourceText.setText(this.formatResources())
     this.scoreText.setText(this.formatScore())
     this.prestigeText.setText(this.formatPrestige())
+    this.showNotifications(this.pendingEvents)
+    if (this.hintsVisible) {
+      this.renderHints()
+    }
+  }
+
+  // Shows (or clears) a dismissible report of what happened to the player's
+  // kingdom this turn (raids, hazards) — one line per event, most recent
+  // turn's events only.
+  private showNotifications(messages: string[]) {
+    this.notificationPanel?.destroy()
+    if (messages.length === 0) return
+
+    const panelWidth = 420
+    const lineHeight = 22
+    const panelHeight = messages.length * lineHeight + 56
+    const panelX = (GRID_PIXELS - panelWidth) / 2
+    const panelY = GRID_TOP + 16
+
+    const container = this.add.container(panelX, panelY)
+    this.notificationPanel = container
+
+    const background = this.add
+      .rectangle(0, 0, panelWidth, panelHeight, UI_BG, 0.97)
+      .setOrigin(0, 0)
+      .setStrokeStyle(2, UI_TEXT_DANGER)
+    background.setInteractive()
+    container.add(background)
+
+    const title = this.add.text(14, 12, 'Kingdom Report', {
+      fontFamily: UI_FONT,
+      fontSize: '15px',
+      color: UI_TEXT_DANGER,
+    })
+    container.add(title)
+
+    messages.forEach((message, index) => {
+      const line = this.add.text(14, 38 + index * lineHeight, message, {
+        fontFamily: UI_FONT,
+        fontSize: '13px',
+        color: UI_TEXT,
+        wordWrap: { width: panelWidth - 28 },
+      })
+      container.add(line)
+    })
+
+    const dismiss = this.add.text(panelWidth - 78, panelHeight - 26, 'Dismiss', {
+      fontFamily: UI_FONT,
+      fontSize: '13px',
+      color: UI_TEXT_MUTED,
+    })
+    dismiss.setInteractive({ useHandCursor: true })
+    dismiss.on('pointerdown', () => this.notificationPanel?.destroy())
+    container.add(dismiss)
+  }
+
+  private openResetConfirm() {
+    this.resetConfirmPanel?.destroy()
+
+    const panelWidth = 340
+    const panelHeight = 130
+    const panelX = (GRID_PIXELS - panelWidth) / 2
+    const panelY = GRID_TOP + (GRID_PIXELS - panelHeight) / 2
+
+    const container = this.add.container(panelX, panelY)
+    this.resetConfirmPanel = container
+
+    const background = this.add
+      .rectangle(0, 0, panelWidth, panelHeight, UI_BG, 0.97)
+      .setOrigin(0, 0)
+      .setStrokeStyle(2, UI_TEXT_DANGER)
+    background.setInteractive()
+    container.add(background)
+
+    const message = this.add.text(panelWidth / 2, 20, 'Reset the game and lose all progress?', {
+      fontFamily: UI_FONT,
+      fontSize: '14px',
+      color: UI_TEXT,
+      align: 'center',
+      wordWrap: { width: panelWidth - 32 },
+    })
+    message.setOrigin(0.5, 0)
+    container.add(message)
+
+    const confirm = this.add.text(40, panelHeight - 32, 'Yes, Reset', {
+      fontFamily: UI_FONT,
+      fontSize: '14px',
+      color: UI_TEXT_DANGER,
+    })
+    confirm.setInteractive({ useHandCursor: true })
+    confirm.on('pointerdown', () => {
+      this.resetConfirmPanel?.destroy()
+      this.performFullReset()
+    })
+    container.add(confirm)
+
+    const cancel = this.add.text(panelWidth - 100, panelHeight - 32, 'Cancel', {
+      fontFamily: UI_FONT,
+      fontSize: '14px',
+      color: UI_TEXT_MUTED,
+    })
+    cancel.setInteractive({ useHandCursor: true })
+    cancel.on('pointerdown', () => this.resetConfirmPanel?.destroy())
+    container.add(cancel)
+  }
+
+  private toggleHints() {
+    this.hintsVisible = !this.hintsVisible
+    if (this.hintsVisible) {
+      this.renderHints()
+    } else {
+      this.hintsPanel?.destroy()
+    }
+  }
+
+  // Renders (or re-renders, if already open) the Hints panel with tips
+  // computed from the current game state. Anchored to the bottom of the grid
+  // so it doesn't collide with the Kingdom Report banner at the top.
+  private renderHints() {
+    this.hintsPanel?.destroy()
+
+    const hints = computeHints({
+      gold: this.resourceSystem.get('gold'),
+      food: this.resourceSystem.get('food'),
+      population: this.resourceSystem.get('population'),
+      turnNumber: this.turnManager.getTurnNumber(),
+      farmCount: this.countBuildingsOfType('farm'),
+      watchtowerCount: this.countBuildingsOfType('watchtower'),
+      totalBuildings: this.getAllBuildingTiles().length,
+      score: this.scoreSystem.computeScore(),
+      threshold: this.scoreSystem.getThreshold(),
+    })
+
+    const panelWidth = 460
+    const lineHeight = 34
+    const panelHeight = hints.length * lineHeight + 46
+    const panelX = (GRID_PIXELS - panelWidth) / 2
+    const panelY = GRID_TOP + GRID_PIXELS - panelHeight - 16
+
+    const container = this.add.container(panelX, panelY)
+    this.hintsPanel = container
+
+    const background = this.add
+      .rectangle(0, 0, panelWidth, panelHeight, UI_BG, 0.97)
+      .setOrigin(0, 0)
+      .setStrokeStyle(2, UI_BORDER)
+    background.setInteractive()
+    container.add(background)
+
+    const title = this.add.text(14, 10, 'Hints', {
+      fontFamily: UI_FONT,
+      fontSize: '15px',
+      color: UI_BORDER,
+    })
+    container.add(title)
+
+    hints.forEach((hint, index) => {
+      const line = this.add.text(14, 34 + index * lineHeight, `• ${hint}`, {
+        fontFamily: UI_FONT,
+        fontSize: '12px',
+        color: UI_TEXT,
+        wordWrap: { width: panelWidth - 28 },
+      })
+      container.add(line)
+    })
   }
 }

@@ -25,3 +25,14 @@ An AI-initiated attack on the player's weakest undefended tile (one with no adja
 
 **Soldier**:
 A unit whose count feeds the "military strength" number the AI's decision loop compares itself against (§7). Has no direct offensive action in v1 — purely a deterrence/comparison stat plus Gold+Food upkeep. The only unit type in v1 — Settler and Trader (both listed as "(optional)" in the GDD) are cut/deferred, since the player owns the full 8x8 grid from the start (no territory left to claim) and AI trade is Market-only for v1.
+
+**Kingdom Report**:
+A dismissible on-screen summary shown after End Turn, naming every Raid and Hazard Event that actually struck a Building that turn (which building, and whether it was destroyed, damaged, or had resources stolen). Only real events are reported — a Raid or Hazard that rolled but found no eligible target produces no report.
+_Avoid_: notification, toast, alert
+
+**Hint**:
+A short, state-derived tip on what to do next (e.g. "build a Farm," "you have no Watchtower"), shown in a toggleable panel. Recomputed from the current game state each time it's shown — not a fixed rules list.
+
+**Reset Game**:
+A full restart triggered by the player: fresh map, resources, turn count, Age, and prestige progress, plus the save is cleared. Distinct from the automatic cataclysm reset between Ages (see Hazard Event / §8's Age loop) — a cataclysm keeps prestige progress (Ages Completed, the permanent bonus) and the turn count; Reset Game keeps nothing.
+_Avoid_: restart (ambiguous with the Age cataclysm), new game

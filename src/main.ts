@@ -12,7 +12,7 @@ const config: Phaser.Types.Core.GameConfig = {
     autoCenter: Phaser.Scale.CENTER_BOTH,
     parent: 'app',
     width: 640,
-    height: 792,
+    height: 852,
   },
   scene: [GameBoardScene],
 }

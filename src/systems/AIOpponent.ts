@@ -1,4 +1,4 @@
-import type { BuildingType } from '../data/buildings'
+import { BUILDING_DEFS, type BuildingType } from '../data/buildings'
 import type { ResourceSystem } from './ResourceSystem'
 import type { TurnManager } from './TurnManager'
 
@@ -73,6 +73,9 @@ export class AIOpponent {
     private playerResources: ResourceSystem,
     private buildingQuery: BuildingTileQuery,
     private getAge: () => number,
+    // Lets the player know a raid actually landed and what it cost them, instead
+    // of the building/resources silently changing with no on-screen feedback.
+    private notify: (message: string) => void,
   ) {}
 
   registerWithTurnManager(turnManager: TurnManager): void {
@@ -134,5 +137,9 @@ export class AIOpponent {
       this.playerResources.add('gold', -stolenGold)
       this.gold += stolenGold
     }
+
+    const label = BUILDING_DEFS[target.type].label
+    const goldClause = stolenGold > 0 ? ` and ${stolenGold} Gold was stolen` : ''
+    this.notify(`Raided! Your ${label} was destroyed${goldClause}.`)
   }
 }

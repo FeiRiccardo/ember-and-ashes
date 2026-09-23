@@ -38,4 +38,10 @@ export class SaveSystem {
       return null
     }
   }
+
+  // Used by the Reset Game feature: wipes the save so a fresh game starts
+  // immediately, with nothing left to reload on next visit.
+  clear(): void {
+    localStorage.removeItem(SAVE_KEY)
+  }
 }
