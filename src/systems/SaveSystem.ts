@@ -3,17 +3,22 @@ import type { BuildingType } from '../data/buildings'
 import type { ResourceType } from '../data/resources'
 
 const SAVE_KEY = 'ember-and-ashes-save'
-// Bumped for ticket 10 (Prestige Carry-Over): SaveData gained `agesCompleted`. An old
-// save without that field would otherwise load with it `undefined` instead of 0; per
-// ticket 06's "no existing save begins a fresh game" behavior, a version mismatch
-// discards the old save and starts fresh rather than risk a malformed load.
-const SAVE_VERSION = 2
+// Bumped for structure-effects-preview tickets 01 (three new per-tile bonus grids: Sawmill/
+// Quarry/Forge) and 05 (Market's per-tile one-conversion-per-turn flag). Same reasoning as the
+// version-2 bump for `agesCompleted` — an old save without these fields would load with
+// `undefined` instead of a boolean grid, so a version mismatch discards the old save and
+// starts fresh rather than risk a malformed load.
+const SAVE_VERSION = 4
 
 export interface SaveData {
   version: number
   terrainMap: TerrainType[][]
   buildings: (BuildingType | null)[][]
   farmWaterBonus: boolean[][]
+  sawmillForestBonus: boolean[][]
+  quarryVolcanicBonus: boolean[][]
+  forgeVolcanicBonus: boolean[][]
+  marketConversionUsed: boolean[][]
   resources: Record<ResourceType, number>
   turnNumber: number
   age: number

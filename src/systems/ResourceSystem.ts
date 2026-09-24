@@ -40,12 +40,16 @@ export class ResourceSystem {
     this.amounts = { ...amounts }
   }
 
+  // Extracted so the structure-effects-preview UI (build-menu preview, inspect panel) can
+  // describe Town Hall's current Age-tapered income without duplicating the taper formula.
+  getTownHallIncome(age: number): number {
+    const taperMultiplier = Math.max(TOWN_HALL_TAPER_FLOOR, 1 - TOWN_HALL_TAPER_RATE * (age - 1))
+    return Math.round(TOWN_HALL_GOLD_PER_TURN * taperMultiplier * 10) / 10
+  }
+
   registerWithTurnManager(turnManager: TurnManager, getAge: () => number): void {
     turnManager.onPhase('production', () => {
-      const age = getAge()
-      const taperMultiplier = Math.max(TOWN_HALL_TAPER_FLOOR, 1 - TOWN_HALL_TAPER_RATE * (age - 1))
-      const taperedIncome = Math.round(TOWN_HALL_GOLD_PER_TURN * taperMultiplier * 10) / 10
-      this.add('gold', taperedIncome)
+      this.add('gold', this.getTownHallIncome(getAge()))
     })
   }
 }

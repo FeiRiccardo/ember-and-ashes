@@ -19,6 +19,16 @@ export interface BuildingDef {
   // Passive Food output per turn (Farm only for v1) and its Water-adjacency bonus.
   foodOutput?: number
   foodWaterBonus?: number
+  // Passive Wood output per turn (Sawmill) and its on-Forest bonus (structure-effects-preview
+  // ticket 01): built directly on Forest beats merely being adjacent to one.
+  woodOutput?: number
+  woodForestBonus?: number
+  // Passive Stone output per turn (Quarry) and its Volcanic-adjacency bonus.
+  stoneOutput?: number
+  stoneVolcanicBonus?: number
+  // Passive Fire output per turn (Forge) and its Volcanic-adjacency bonus (on or adjacent).
+  fireOutput?: number
+  fireVolcanicBonus?: number
   // Score contribution per building placed (locked during grilling; §8 formula).
   prestigeValue: number
 }
@@ -55,6 +65,8 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     color: 0x7a4a2b,
     buildable: true,
     cost: { gold: 10, stone: 5 },
+    woodOutput: 4,
+    woodForestBonus: 2,
     prestigeValue: 15,
   },
   quarry: {
@@ -63,6 +75,8 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     color: 0x9b9587,
     buildable: true,
     cost: { gold: 10, wood: 15 },
+    stoneOutput: 4,
+    stoneVolcanicBonus: 2,
     prestigeValue: 15,
   },
   forge: {
@@ -71,6 +85,8 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     color: 0xe0521c,
     buildable: true,
     cost: { gold: 15, stone: 20 },
+    fireOutput: 3,
+    fireVolcanicBonus: 2,
     prestigeValue: 30,
   },
   market: {

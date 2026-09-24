@@ -41,6 +41,22 @@ export function hasWaterBonus(row: number, col: number, terrainMap: TerrainType[
   return neighbors(row, col, size).some(([r, c]) => terrainMap[r][c] === 'water')
 }
 
+// Sawmill gets a Wood bonus when built directly on Forest, beating merely being adjacent
+// to one (structure-effects-preview ticket 01) — the two are otherwise treated as equally
+// valid by isTerrainSatisfied's own on/near-Forest check above.
+export function hasForestBonus(row: number, col: number, terrainMap: TerrainType[][]): boolean {
+  return terrainMap[row][col] === 'forest'
+}
+
+// Quarry/Forge get a bonus when on or adjacent to a Volcanic tile (structure-effects-preview
+// ticket 01). Quarry can never actually be "on" Volcanic (it requires Hills to place), so for
+// Quarry this reduces to adjacency only; Forge has no placement constraint, so both count.
+export function hasVolcanicAdjacency(row: number, col: number, terrainMap: TerrainType[][]): boolean {
+  const size = terrainMap.length
+  if (terrainMap[row][col] === 'volcanic') return true
+  return neighbors(row, col, size).some(([r, c]) => terrainMap[r][c] === 'volcanic')
+}
+
 export function canAfford(type: BuildingType, resourceSystem: ResourceSystem): boolean {
   const cost = BUILDING_DEFS[type].cost
   return (Object.entries(cost) as [ResourceType, number][]).every(

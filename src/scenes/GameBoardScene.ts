@@ -15,11 +15,21 @@ import { BUILDING_DEFS, BUILDABLE_TYPES, type BuildingType } from '../data/build
 import {
   isTerrainSatisfied,
   hasWaterBonus,
+  hasForestBonus,
+  hasVolcanicAdjacency,
   canAfford,
   deductCost,
   formatCost,
   type BuildingGrid,
 } from '../systems/BuildingPlacement'
+import { describeBuildingEffect } from '../systems/BuildingEffects'
+import {
+  canConvert,
+  convert,
+  MARKET_CONVERSION_INPUT_AMOUNT,
+  MARKET_CONVERSION_OUTPUT_GOLD,
+  type MarketConvertibleResource,
+} from '../systems/MarketConversion'
 
 const GRID_SIZE = 8
 const TILE_SIZE = 80
@@ -66,6 +76,10 @@ export class GameBoardScene extends Phaser.Scene {
   private terrainVisuals: Phaser.GameObjects.Rectangle[][] = []
   private buildings: BuildingGrid = []
   private farmWaterBonus: boolean[][] = []
+  private sawmillForestBonus: boolean[][] = []
+  private quarryVolcanicBonus: boolean[][] = []
+  private forgeVolcanicBonus: boolean[][] = []
+  private marketConversionUsed: boolean[][] = []
   private buildingVisuals: Phaser.GameObjects.GameObject[][][] = []
   private populationSystem = new PopulationSystem(this.resourceSystem, () =>
     this.countBuildingsOfType('farm'),
@@ -76,6 +90,7 @@ export class GameBoardScene extends Phaser.Scene {
   )
   private saveSystem = new SaveSystem()
   private buildMenu?: Phaser.GameObjects.Container
+  private inspectPanel?: Phaser.GameObjects.Container
   // Single shared Graphics layer holding every tile's terrain texture accent
   // (see drawTerrainTexture); recreated each time drawGrid() runs.
   private terrainTextureGraphics?: Phaser.GameObjects.Graphics
@@ -102,6 +117,10 @@ export class GameBoardScene extends Phaser.Scene {
       this.terrainMap = saved.terrainMap
       this.buildings = saved.buildings
       this.farmWaterBonus = saved.farmWaterBonus
+      this.sawmillForestBonus = saved.sawmillForestBonus
+      this.quarryVolcanicBonus = saved.quarryVolcanicBonus
+      this.forgeVolcanicBonus = saved.forgeVolcanicBonus
+      this.marketConversionUsed = saved.marketConversionUsed
       this.resourceSystem.setAll(saved.resources)
       this.turnManager.setTurnNumber(saved.turnNumber)
       this.scoreSystem.setAge(saved.age)
@@ -110,13 +129,18 @@ export class GameBoardScene extends Phaser.Scene {
       this.terrainMap = generateMap(Date.now())
       this.buildings = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(null))
       this.farmWaterBonus = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
+      this.sawmillForestBonus = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
+      this.quarryVolcanicBonus = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
+      this.forgeVolcanicBonus = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
+      this.marketConversionUsed = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
       this.buildings[TOWN_HALL_TILE.row][TOWN_HALL_TILE.col] = 'townHall'
     }
 
     this.resourceSystem.registerWithTurnManager(this.turnManager, () => this.scoreSystem.getAge())
     this.populationSystem.registerWithTurnManager(this.turnManager)
     this.scoreSystem.registerWithTurnManager(this.turnManager)
-    this.registerFarmProduction()
+    this.registerBuildingProduction()
+    this.registerMarketConversionReset()
     this.registerHazardSystem()
     this.registerAutoSave()
     this.drawGrid()
@@ -151,6 +175,10 @@ export class GameBoardScene extends Phaser.Scene {
       terrainMap: this.terrainMap,
       buildings: this.buildings,
       farmWaterBonus: this.farmWaterBonus,
+      sawmillForestBonus: this.sawmillForestBonus,
+      quarryVolcanicBonus: this.quarryVolcanicBonus,
+      forgeVolcanicBonus: this.forgeVolcanicBonus,
+      marketConversionUsed: this.marketConversionUsed,
       resources: this.resourceSystem.getAll(),
       turnNumber: this.turnManager.getTurnNumber(),
       age: this.scoreSystem.getAge(),
@@ -158,19 +186,52 @@ export class GameBoardScene extends Phaser.Scene {
     })
   }
 
-  private registerFarmProduction() {
+  private registerBuildingProduction() {
     this.turnManager.onPhase('production', () => {
       for (let row = 0; row < GRID_SIZE; row++) {
         for (let col = 0; col < GRID_SIZE; col++) {
-          if (this.buildings[row][col] !== 'farm') continue
-          const def = BUILDING_DEFS.farm
-          let output = def.foodOutput ?? 0
-          if (this.farmWaterBonus[row][col]) {
-            output += def.foodWaterBonus ?? 0
+          switch (this.buildings[row][col]) {
+            case 'farm': {
+              const def = BUILDING_DEFS.farm
+              let output = def.foodOutput ?? 0
+              if (this.farmWaterBonus[row][col]) output += def.foodWaterBonus ?? 0
+              this.resourceSystem.add('food', output)
+              break
+            }
+            case 'sawmill': {
+              const def = BUILDING_DEFS.sawmill
+              let output = def.woodOutput ?? 0
+              if (this.sawmillForestBonus[row][col]) output += def.woodForestBonus ?? 0
+              this.resourceSystem.add('wood', output)
+              break
+            }
+            case 'quarry': {
+              const def = BUILDING_DEFS.quarry
+              let output = def.stoneOutput ?? 0
+              if (this.quarryVolcanicBonus[row][col]) output += def.stoneVolcanicBonus ?? 0
+              this.resourceSystem.add('stone', output)
+              break
+            }
+            case 'forge': {
+              const def = BUILDING_DEFS.forge
+              let output = def.fireOutput ?? 0
+              if (this.forgeVolcanicBonus[row][col]) output += def.fireVolcanicBonus ?? 0
+              this.resourceSystem.add('fire', output)
+              break
+            }
           }
-          this.resourceSystem.add('food', output)
         }
       }
+    })
+  }
+
+  // Each Market's one-conversion-per-turn allowance (ticket 05) resets independently at the
+  // start of every turn, so a second Market meaningfully doubles conversion throughput. Runs
+  // on the `production` phase, same as registerBuildingProduction, so it's back in place by
+  // the time the player sees the next turn number.
+  private registerMarketConversionReset() {
+    this.turnManager.onPhase('production', () => {
+      this.marketConversionUsed = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
     })
   }
 
@@ -218,18 +279,32 @@ export class GameBoardScene extends Phaser.Scene {
     if (!this.buildings[row][col]) return
     this.buildings[row][col] = null
     this.farmWaterBonus[row][col] = false
+    this.sawmillForestBonus[row][col] = false
+    this.quarryVolcanicBonus[row][col] = false
+    this.forgeVolcanicBonus[row][col] = false
+    this.marketConversionUsed[row][col] = false
     for (const visual of this.buildingVisuals[row][col]) {
       visual.destroy()
     }
     this.buildingVisuals[row][col] = []
   }
 
+  private computeBonusEligibility(row: number, col: number, type: BuildingType): void {
+    if (type === 'farm') {
+      this.farmWaterBonus[row][col] = hasWaterBonus(row, col, this.terrainMap)
+    } else if (type === 'sawmill') {
+      this.sawmillForestBonus[row][col] = hasForestBonus(row, col, this.terrainMap)
+    } else if (type === 'quarry') {
+      this.quarryVolcanicBonus[row][col] = hasVolcanicAdjacency(row, col, this.terrainMap)
+    } else if (type === 'forge') {
+      this.forgeVolcanicBonus[row][col] = hasVolcanicAdjacency(row, col, this.terrainMap)
+    }
+  }
+
   placeBuildingFree(row: number, col: number, type: BuildingType): void {
     if (this.buildings[row][col]) return
     this.buildings[row][col] = type
-    if (type === 'farm') {
-      this.farmWaterBonus[row][col] = hasWaterBonus(row, col, this.terrainMap)
-    }
+    this.computeBonusEligibility(row, col, type)
     this.drawBuildingOverlay(row, col, type)
   }
 
@@ -243,6 +318,18 @@ export class GameBoardScene extends Phaser.Scene {
 
   hasFarmWaterBonus(row: number, col: number): boolean {
     return this.farmWaterBonus[row][col]
+  }
+
+  hasSawmillForestBonus(row: number, col: number): boolean {
+    return this.sawmillForestBonus[row][col]
+  }
+
+  hasQuarryVolcanicBonus(row: number, col: number): boolean {
+    return this.quarryVolcanicBonus[row][col]
+  }
+
+  hasForgeVolcanicBonus(row: number, col: number): boolean {
+    return this.forgeVolcanicBonus[row][col]
   }
 
   private drawGrid() {
@@ -385,6 +472,7 @@ export class GameBoardScene extends Phaser.Scene {
   // building visuals, regenerates a fresh map, and re-places Town Hall.
   private regenerateBoard(): void {
     this.buildMenu?.destroy()
+    this.inspectPanel?.destroy()
 
     for (let row = 0; row < GRID_SIZE; row++) {
       for (let col = 0; col < GRID_SIZE; col++) {
@@ -398,6 +486,10 @@ export class GameBoardScene extends Phaser.Scene {
     this.terrainMap = generateMap(Date.now())
     this.buildings = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(null))
     this.farmWaterBonus = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
+    this.sawmillForestBonus = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
+    this.quarryVolcanicBonus = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
+    this.forgeVolcanicBonus = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
+    this.marketConversionUsed = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false))
     this.buildingVisuals = Array.from({ length: GRID_SIZE }, () =>
       Array.from({ length: GRID_SIZE }, () => []),
     )
@@ -461,11 +553,16 @@ export class GameBoardScene extends Phaser.Scene {
     this.drawBuildingIcon(icon, type, centerX, centerY, size, def.color)
     visuals.push(icon)
 
-    if (type === 'farm' && this.farmWaterBonus[row][col]) {
-      // Small blue dot marks a Farm's Water-adjacency bonus (GDD §5).
-      visuals.push(
-        this.add.circle(centerX + size / 2 - 4, centerY - size / 2 + 4, 5, TERRAIN_COLORS.water),
-      )
+    // Small colored dot marks an active terrain bonus (structure-effects-preview ticket 01),
+    // echoing the bonus terrain's own color — same corner Farm's Water dot already used.
+    const bonusActive =
+      (type === 'farm' && this.farmWaterBonus[row][col]) ||
+      (type === 'sawmill' && this.sawmillForestBonus[row][col]) ||
+      (type === 'quarry' && this.quarryVolcanicBonus[row][col]) ||
+      (type === 'forge' && this.forgeVolcanicBonus[row][col])
+    if (bonusActive) {
+      const bonusColor = type === 'farm' ? TERRAIN_COLORS.water : type === 'sawmill' ? TERRAIN_COLORS.forest : TERRAIN_COLORS.volcanic
+      visuals.push(this.add.circle(centerX + size / 2 - 4, centerY - size / 2 + 4, 5, bonusColor))
     }
 
     this.buildingVisuals[row][col] = visuals
@@ -640,17 +737,24 @@ export class GameBoardScene extends Phaser.Scene {
   }
 
   private handleTileClick(row: number, col: number) {
-    if (this.buildings[row][col] !== null) {
+    const type = this.buildings[row][col]
+    if (type !== null) {
+      this.openInspectPanel(row, col, type)
       return
     }
     this.openBuildMenu(row, col)
   }
 
+  private getTownHallIncome(): number {
+    return this.resourceSystem.getTownHallIncome(this.scoreSystem.getAge())
+  }
+
   private openBuildMenu(row: number, col: number) {
     this.buildMenu?.destroy()
+    this.inspectPanel?.destroy()
 
-    const panelWidth = 360
-    const rowHeight = 30
+    const panelWidth = 440
+    const rowHeight = 46
     const panelHeight = rowHeight * (BUILDABLE_TYPES.length + 1) + 20
     const panelX = (GRID_PIXELS - panelWidth) / 2
     const panelY = GRID_TOP + (GRID_PIXELS - panelHeight) / 2
@@ -667,6 +771,8 @@ export class GameBoardScene extends Phaser.Scene {
     background.setInteractive()
     container.add(background)
 
+    const townHallIncome = this.getTownHallIncome()
+
     BUILDABLE_TYPES.forEach((type, index) => {
       const def = BUILDING_DEFS[type]
       const terrainOk = isTerrainSatisfied(type, row, col, this.terrainMap)
@@ -682,9 +788,27 @@ export class GameBoardScene extends Phaser.Scene {
       })
       container.add(text)
 
+      // Effect preview (structure-effects-preview ticket 03): computed for this exact
+      // tile, so a terrain bonus the tile actually qualifies for shows up before the
+      // player commits. Shown even on invalid/disabled rows, matching the label above.
+      const effectText = this.add.text(
+        10,
+        rowY + 18,
+        describeBuildingEffect(type, { row, col, terrainMap: this.terrainMap, townHallIncome }),
+        {
+          fontFamily: UI_FONT,
+          fontSize: '11px',
+          color: UI_TEXT_MUTED,
+          wordWrap: { width: panelWidth - 20 },
+        },
+      )
+      container.add(effectText)
+
       if (valid) {
         text.setInteractive({ useHandCursor: true })
         text.on('pointerdown', () => this.placeBuilding(row, col, type))
+        effectText.setInteractive({ useHandCursor: true })
+        effectText.on('pointerdown', () => this.placeBuilding(row, col, type))
       }
     })
 
@@ -699,6 +823,94 @@ export class GameBoardScene extends Phaser.Scene {
     container.add(cancelText)
   }
 
+  // Click-to-inspect (structure-effects-preview ticket 04): shows the same
+  // describeBuildingEffect text as the build menu, computed live for this exact tile, for a
+  // building that's already placed — including Town Hall, which is never built through the menu.
+  private openInspectPanel(row: number, col: number, type: BuildingType) {
+    this.inspectPanel?.destroy()
+    this.buildMenu?.destroy()
+
+    const def = BUILDING_DEFS[type]
+    const isMarket = type === 'market'
+    const panelWidth = 380
+    const panelHeight = isMarket ? 192 : 112
+    const panelX = (GRID_PIXELS - panelWidth) / 2
+    const panelY = GRID_TOP + (GRID_PIXELS - panelHeight) / 2
+
+    const container = this.add.container(panelX, panelY)
+    this.inspectPanel = container
+
+    const background = this.add
+      .rectangle(0, 0, panelWidth, panelHeight, UI_BG, 0.97)
+      .setOrigin(0, 0)
+      .setStrokeStyle(2, UI_BORDER)
+    background.setInteractive()
+    container.add(background)
+
+    const title = this.add.text(14, 14, def.label, {
+      fontFamily: UI_FONT,
+      fontSize: '16px',
+      color: '#c9a227',
+    })
+    container.add(title)
+
+    const marketUsedThisTurn = isMarket ? this.marketConversionUsed[row][col] : false
+    const effectText = this.add.text(
+      14,
+      44,
+      describeBuildingEffect(type, {
+        row,
+        col,
+        terrainMap: this.terrainMap,
+        townHallIncome: this.getTownHallIncome(),
+        marketUsedThisTurn,
+      }),
+      {
+        fontFamily: UI_FONT,
+        fontSize: '13px',
+        color: UI_TEXT,
+        wordWrap: { width: panelWidth - 28 },
+      },
+    )
+    container.add(effectText)
+
+    if (isMarket) {
+      const conversionRows: { resource: MarketConvertibleResource; y: number }[] = [
+        { resource: 'wood', y: 78 },
+        { resource: 'stone', y: 114 },
+      ]
+      for (const { resource, y } of conversionRows) {
+        const enabled = canConvert(resource, marketUsedThisTurn, this.resourceSystem)
+        const label = `Convert ${MARKET_CONVERSION_INPUT_AMOUNT} ${RESOURCE_LABELS[resource]} → ${MARKET_CONVERSION_OUTPUT_GOLD} Gold`
+        const button = this.add.text(14, y, label, {
+          fontFamily: UI_FONT,
+          fontSize: '13px',
+          color: enabled ? UI_TEXT : UI_TEXT_DISABLED,
+        })
+        container.add(button)
+
+        if (enabled) {
+          button.setInteractive({ useHandCursor: true })
+          button.on('pointerdown', () => {
+            convert(resource, this.resourceSystem)
+            this.marketConversionUsed[row][col] = true
+            this.resourceText.setText(this.formatResources())
+            this.openInspectPanel(row, col, type)
+          })
+        }
+      }
+    }
+
+    const close = this.add.text(panelWidth - 66, panelHeight - 28, 'Close', {
+      fontFamily: UI_FONT,
+      fontSize: '13px',
+      color: UI_TEXT_MUTED,
+    })
+    close.setInteractive({ useHandCursor: true })
+    close.on('pointerdown', () => this.inspectPanel?.destroy())
+    container.add(close)
+  }
+
   private placeBuilding(row: number, col: number, type: BuildingType) {
     if (this.buildings[row][col] !== null) {
       this.buildMenu?.destroy()
@@ -710,9 +922,7 @@ export class GameBoardScene extends Phaser.Scene {
 
     deductCost(type, this.resourceSystem)
     this.buildings[row][col] = type
-    if (type === 'farm') {
-      this.farmWaterBonus[row][col] = hasWaterBonus(row, col, this.terrainMap)
-    }
+    this.computeBonusEligibility(row, col, type)
     this.drawBuildingOverlay(row, col, type)
     this.resourceText.setText(this.formatResources())
     this.scoreText.setText(this.formatScore())
