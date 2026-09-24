@@ -13,8 +13,29 @@ const TOWN_HALL_GOLD_PER_TURN = 2
 const TOWN_HALL_TAPER_RATE = 0.1
 const TOWN_HALL_TAPER_FLOOR = 0.5
 
+// Age-1-only starting bonus (placeholder-but-concrete, tunable via playtesting): a gentler
+// first run without touching INITIAL_RESOURCES itself, since that baseline is also what every
+// later Age restarts from and those should stay on the harder, unscaled numbers. Stone's +5
+// specifically covers a Watchtower's 15-Stone cost from the start. Population/Fire/Water are
+// untouched — growth and terrain-gathered resources aren't the kind of thing a flat starting
+// gift makes sense for.
+const AGE_ONE_RESOURCE_BONUS: Partial<Record<ResourceType, number>> = {
+  gold: 20,
+  food: 10,
+  wood: 10,
+  stone: 5,
+}
+
+function ageOneStartingResources(): Record<ResourceType, number> {
+  const amounts = { ...INITIAL_RESOURCES }
+  for (const [resource, bonus] of Object.entries(AGE_ONE_RESOURCE_BONUS) as [ResourceType, number][]) {
+    amounts[resource] += bonus
+  }
+  return amounts
+}
+
 export class ResourceSystem {
-  private amounts: Record<ResourceType, number> = { ...INITIAL_RESOURCES }
+  private amounts: Record<ResourceType, number> = ageOneStartingResources()
 
   get(resource: ResourceType): number {
     return this.amounts[resource]
@@ -30,9 +51,16 @@ export class ResourceSystem {
 
   // Used when a new Age begins (ticket 09): the run's banked resources don't
   // carry across a cataclysm. Permanent cross-Age bonuses are ticket 10's job,
-  // layered on top of this baseline reset.
+  // layered on top of this baseline reset. Deliberately the harder, un-bonused
+  // baseline — only the true Age 1 start gets resetToAgeOne()'s training wheels.
   reset(): void {
     this.amounts = { ...INITIAL_RESOURCES }
+  }
+
+  // Used by Reset Game (a full restart back to Age 1): same Age-1-only bonus the
+  // constructor applies on first-ever load, so starting over feels the same either way.
+  resetToAgeOne(): void {
+    this.amounts = ageOneStartingResources()
   }
 
   // Used when restoring a save (ticket 06).

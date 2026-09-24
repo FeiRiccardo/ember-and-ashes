@@ -102,6 +102,7 @@ export class GameBoardScene extends Phaser.Scene {
   private resetConfirmPanel?: Phaser.GameObjects.Container
   private hintsPanel?: Phaser.GameObjects.Container
   private hintsVisible = false
+  private rulesModal?: Phaser.GameObjects.Container
 
   constructor() {
     super('GameBoard')
@@ -146,6 +147,11 @@ export class GameBoardScene extends Phaser.Scene {
     this.drawGrid()
     this.createResourceBar()
     this.createTurnUI()
+
+    if (!this.saveSystem.hasSeenRules()) {
+      this.openRulesModal()
+      this.saveSystem.markRulesSeen()
+    }
 
     // AI TURN HOOK: ticket 07 (AI Opponent) registers its aiTurn-phase handler here.
     new AIOpponent(
@@ -519,7 +525,7 @@ export class GameBoardScene extends Phaser.Scene {
     this.pendingEvents = []
 
     this.regenerateBoard()
-    this.resourceSystem.reset()
+    this.resourceSystem.resetToAgeOne()
     this.turnManager.setTurnNumber(1)
     this.scoreSystem.setAge(1)
     this.prestigeSystem.setAgesCompleted(0)
@@ -749,9 +755,24 @@ export class GameBoardScene extends Phaser.Scene {
     return this.resourceSystem.getTownHallIncome(this.scoreSystem.getAge())
   }
 
+  // Full-canvas, invisible, interactive rectangle. Callers create this BEFORE their panel's
+  // own container, so the panel renders on top of it (and still absorbs its own clicks) while
+  // any click outside the panel hits this instead and closes it. Callers then attach
+  // `container.once('destroy', () => overlay.destroy())` once the container exists, so the
+  // overlay always cleans itself up no matter which path closes the panel (a Cancel/Close/
+  // Dismiss button, another panel opening on top of it, or the outside click itself) — no
+  // shared state, no risk of a stale invisible rect eating future clicks.
+  private addOutsideClickOverlay(onOutsideClick: () => void): Phaser.GameObjects.Rectangle {
+    const overlay = this.add.rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0).setOrigin(0, 0)
+    overlay.setInteractive()
+    overlay.on('pointerdown', onOutsideClick)
+    return overlay
+  }
+
   private openBuildMenu(row: number, col: number) {
     this.buildMenu?.destroy()
     this.inspectPanel?.destroy()
+    const overlay = this.addOutsideClickOverlay(() => this.buildMenu?.destroy())
 
     const panelWidth = 440
     const rowHeight = 46
@@ -761,6 +782,7 @@ export class GameBoardScene extends Phaser.Scene {
 
     const container = this.add.container(panelX, panelY)
     this.buildMenu = container
+    container.once('destroy', () => overlay.destroy())
 
     const background = this.add
       .rectangle(0, 0, panelWidth, panelHeight, UI_BG, 0.97)
@@ -829,6 +851,7 @@ export class GameBoardScene extends Phaser.Scene {
   private openInspectPanel(row: number, col: number, type: BuildingType) {
     this.inspectPanel?.destroy()
     this.buildMenu?.destroy()
+    const overlay = this.addOutsideClickOverlay(() => this.inspectPanel?.destroy())
 
     const def = BUILDING_DEFS[type]
     const isMarket = type === 'market'
@@ -839,6 +862,7 @@ export class GameBoardScene extends Phaser.Scene {
 
     const container = this.add.container(panelX, panelY)
     this.inspectPanel = container
+    container.once('destroy', () => overlay.destroy())
 
     const background = this.add
       .rectangle(0, 0, panelWidth, panelHeight, UI_BG, 0.97)
@@ -1007,11 +1031,12 @@ export class GameBoardScene extends Phaser.Scene {
     endTurnLabel.setOrigin(0.5)
     endTurnButton.on('pointerdown', () => this.handleEndTurn())
 
-    // Row B: secondary controls (Save & Quit, Reset, Hints), evenly spaced.
+    // Row B: secondary controls (Save & Quit, Reset, Hints, Rules), evenly spaced.
     const rowBY = barY + UI_ROW_HEIGHT
     const margin = 16
     const gap = 12
-    const smallButtonWidth = (GRID_PIXELS - margin * 2 - gap * 2) / 3
+    const smallButtonCount = 4
+    const smallButtonWidth = (GRID_PIXELS - margin * 2 - gap * (smallButtonCount - 1)) / smallButtonCount
     const smallButtonY = rowBY + (UI_ROW_HEIGHT - buttonHeight) / 2
 
     const makeSmallButton = (
@@ -1045,6 +1070,7 @@ export class GameBoardScene extends Phaser.Scene {
     makeSmallButton(1, 'Reset', BUTTON_SECONDARY, () => this.openResetConfirm())
 
     makeSmallButton(2, 'Hints', BUTTON_SECONDARY, () => this.toggleHints())
+    makeSmallButton(3, 'Rules', BUTTON_SECONDARY, () => this.openRulesModal())
   }
 
   private handleEndTurn() {
@@ -1066,6 +1092,7 @@ export class GameBoardScene extends Phaser.Scene {
   private showNotifications(messages: string[]) {
     this.notificationPanel?.destroy()
     if (messages.length === 0) return
+    const overlay = this.addOutsideClickOverlay(() => this.notificationPanel?.destroy())
 
     const panelWidth = 420
     const lineHeight = 22
@@ -1075,6 +1102,7 @@ export class GameBoardScene extends Phaser.Scene {
 
     const container = this.add.container(panelX, panelY)
     this.notificationPanel = container
+    container.once('destroy', () => overlay.destroy())
 
     const background = this.add
       .rectangle(0, 0, panelWidth, panelHeight, UI_BG, 0.97)
@@ -1112,6 +1140,7 @@ export class GameBoardScene extends Phaser.Scene {
 
   private openResetConfirm() {
     this.resetConfirmPanel?.destroy()
+    const overlay = this.addOutsideClickOverlay(() => this.resetConfirmPanel?.destroy())
 
     const panelWidth = 340
     const panelHeight = 130
@@ -1120,6 +1149,7 @@ export class GameBoardScene extends Phaser.Scene {
 
     const container = this.add.container(panelX, panelY)
     this.resetConfirmPanel = container
+    container.once('destroy', () => overlay.destroy())
 
     const background = this.add
       .rectangle(0, 0, panelWidth, panelHeight, UI_BG, 0.97)
@@ -1174,6 +1204,13 @@ export class GameBoardScene extends Phaser.Scene {
   // so it doesn't collide with the Kingdom Report banner at the top.
   private renderHints() {
     this.hintsPanel?.destroy()
+    // Outside-click also has to clear hintsVisible, not just destroy the panel — otherwise
+    // the Hints button's next click (which reads hintsVisible to decide show vs. hide) would
+    // think Hints is still open and just toggle it further shut instead of reopening it.
+    const overlay = this.addOutsideClickOverlay(() => {
+      this.hintsPanel?.destroy()
+      this.hintsVisible = false
+    })
 
     const hints = computeHints({
       gold: this.resourceSystem.get('gold'),
@@ -1195,6 +1232,7 @@ export class GameBoardScene extends Phaser.Scene {
 
     const container = this.add.container(panelX, panelY)
     this.hintsPanel = container
+    container.once('destroy', () => overlay.destroy())
 
     const background = this.add
       .rectangle(0, 0, panelWidth, panelHeight, UI_BG, 0.97)
@@ -1219,5 +1257,68 @@ export class GameBoardScene extends Phaser.Scene {
       })
       container.add(line)
     })
+  }
+
+  // First-load onboarding (or reopened via the Rules button): condensed from
+  // documentation.md's Core Loop / Buildings / Win Condition sections. Height is measured
+  // from the actual wrapped text rather than a fixed line count, since paragraph lengths vary.
+  private openRulesModal() {
+    this.rulesModal?.destroy()
+    const overlay = this.addOutsideClickOverlay(() => this.rulesModal?.destroy())
+
+    const paragraphs = [
+      "Goal: grow your kingdom's Score toward this Age's Destruction Threshold, shown at the top. Reach it and a cataclysm resets the map — but you keep a small permanent bonus and begin a tougher new Age.",
+      '• Click an empty tile to open the build menu, or a placed building to inspect its live effect.',
+      '• Each building needs the right terrain nearby (Forest, Hills, Water, or Volcanic) and produces a resource every turn.',
+      '• Click End Turn to resolve production, Population growth, the rival AI kingdom, and random hazards.',
+      '• Keep an eye on Food — without a Farm, your Population shrinks over time.',
+    ]
+
+    const panelWidth = 480
+    const panelX = (GRID_PIXELS - panelWidth) / 2
+    const container = this.add.container(panelX, 0)
+    this.rulesModal = container
+    container.once('destroy', () => overlay.destroy())
+
+    const title = this.add.text(20, 18, 'Welcome to Ember & Ashes', {
+      fontFamily: UI_FONT,
+      fontSize: '18px',
+      color: '#c9a227',
+    })
+    container.add(title)
+
+    let cursorY = 18 + title.height + 16
+    for (const paragraph of paragraphs) {
+      const text = this.add.text(20, cursorY, paragraph, {
+        fontFamily: UI_FONT,
+        fontSize: '13px',
+        color: UI_TEXT,
+        wordWrap: { width: panelWidth - 40 },
+        lineSpacing: 4,
+      })
+      container.add(text)
+      cursorY += text.height + 12
+    }
+
+    const closeY = cursorY + 4
+    const close = this.add.text(panelWidth - 74, closeY, 'Got it', {
+      fontFamily: UI_FONT,
+      fontSize: '14px',
+      color: '#c9a227',
+    })
+    close.setInteractive({ useHandCursor: true })
+    close.on('pointerdown', () => this.rulesModal?.destroy())
+    container.add(close)
+
+    const panelHeight = closeY + close.height + 18
+    const background = this.add
+      .rectangle(0, 0, panelWidth, panelHeight, UI_BG, 0.97)
+      .setOrigin(0, 0)
+      .setStrokeStyle(2, UI_BORDER)
+    background.setInteractive()
+    container.add(background)
+    container.sendToBack(background)
+
+    container.setY(GRID_TOP + Math.max(0, (GRID_PIXELS - panelHeight) / 2))
   }
 }

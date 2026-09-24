@@ -3,6 +3,11 @@ import type { BuildingType } from '../data/buildings'
 import type { ResourceType } from '../data/resources'
 
 const SAVE_KEY = 'ember-and-ashes-save'
+// Separate key (not part of SaveData/SAVE_VERSION): whether the rules modal has ever been
+// dismissed. Deliberately independent of the save-game state so it survives Reset Game (the
+// player hasn't forgotten the rules just because their kingdom did) and isn't wiped by a
+// future SAVE_VERSION bump.
+const RULES_SEEN_KEY = 'ember-and-ashes-rules-seen'
 // Bumped for structure-effects-preview tickets 01 (three new per-tile bonus grids: Sawmill/
 // Quarry/Forge) and 05 (Market's per-tile one-conversion-per-turn flag). Same reasoning as the
 // version-2 bump for `agesCompleted` — an old save without these fields would load with
@@ -48,5 +53,13 @@ export class SaveSystem {
   // immediately, with nothing left to reload on next visit.
   clear(): void {
     localStorage.removeItem(SAVE_KEY)
+  }
+
+  hasSeenRules(): boolean {
+    return localStorage.getItem(RULES_SEEN_KEY) !== null
+  }
+
+  markRulesSeen(): void {
+    localStorage.setItem(RULES_SEEN_KEY, '1')
   }
 }
